@@ -1,0 +1,757 @@
+---
+title: "Practica Fundamentos"
+author: "Ana Moscoso Pérez , Gonzalo Gutiérrez Acosta, Juan Francisco Romero Moreno"
+date: "17/12/2021"
+fig_caption: yes
+
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    #number_sections: true
+    theme: flatly
+    code_folding: show
+---
+
+```{r setup0, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+datos <- read.csv("kc_house_data.csv")
+attach(datos)
+library(tidyr)
+library(ggplot2)
+library(dplyr)
+library(readr)
+library(Hmisc)
+library(lubridate)
+library(GGally)
+library(caret)
+library(corrplot)
+library(gridExtra)
+library(caret)
+library(dplyr)
+library(VIM)
+library(car)
+library(tidyr)
+library(tidyverse)
+library(glmnet)
+library(leaflet)
+library(RColorBrewer)
+```
+
+
+```{r setup, warning = FALSE, include=FALSE}
+n=nrow(datos)
+m=ncol(datos)
+set.seed(102)
+s= sample(1:n, 20)
+s2= sample(1:n,15)
+s3=sample(1:n,45)
+#datos[s,] = apply (datos[s,], 1, function(x) {x[sample( c(1:m), m/3)] <- NA ;x} )
+datos[s2,][sample( c(1:m), 5)] <- NA
+datos[s3,][sample( c(1:m), 3)] <- NA
+datos[c(3,7,9),][sample( c(1:m), 6)] <- NA
+datos[s,][sample( c(1:m), 2)] <- NA
+datos[13:17,][sample( c(1:m), 3)] <- NA
+summary(datos) #vemos que hay casi todas las columnas. Lo cual nos puede dar una pista de que no
+#existe relacion entre los valores faltantes de las distintas variables. Sino que deben tratar
+#de observaciones incompletas. 
+```
+
+# 1. Introducción al estudio
+
+Hemos escogido un dataset que recoge ciertas características de unas casas en el área del condado de King, del estado de Whasington junto al valor por el que se vendieron. En el conjunto tenemos un total de 21613 observaciones, es decir viviendas. 
+
+Nuestro objetivo será usar esta muestra para poder predecir el valor de una casa en este área en funcion de las variables estudiadas.
+
+Las variables que nos ocupan y que se presentan en el dataset son:
+
+* id – Identificador único de cada casa
+* date – Fecha en la que se vendió la casa
+* price – Precio 
+* bedrooms – Número de habitaciones
+* bathrooms – Número de baños
+* sqft_living – Pies cuadrados útiles de la casa
+* sqft_lot – Pies cuadrados del terreno en el que se sitúa la casa
+* floors – Número de plantas
+* waterfront – Si el apartamento tiene o no vistas al mar
+* view – Cómo de buena son las vistas desde la propiedad
+* condition – Condición de la casa
+* grade – Nivel de construcción y diseño de la casa 
+* sqft_above – Pies cuadrados del interior de la casa sin contar el sótano
+* sqft_basement – Pies cuadrados del sótano 
+* yr_built – Año en que fue construida la casa  inicialmente 
+* yr_renovated – Año en el que la casa fue renovada
+* zipcode – Cógido referente a la zona donde se encuentra la casa 
+* lat - Latitud
+* long - Longitud
+* sqft_living15 – media de los pies cuadrados útiles de las 15 casas más cercanas
+* sqft_lot15 – media de los pies cuadrados del terreno de las 15 casas más cercanas
+
+
+# 2. Tranformaciones en el tipo de variables
+
+```{r}
+str(datos)
+```
+Podemos observar que hay variables que no están codificadas correctamente: 
+
+- La variable "id" aparece como numérica,"num", cuando realmente debería ser de tipo carácter,"chr".
+- La variable "date" aparece como "chr", cuando debería ser "Date". 
+- Las variables "waterfront" y "zipcode" deberían ser de tipo "factor" en vez de enteros "int".
+
+Por lo tanto, para modificar los tipos de variables hacemos lo siguiente:
+
+```{r}
+datos$id=as.character(datos$id)
+datos$date = as.Date(datos$date, "%Y%m%dT%H%M%S")
+#datee=datos$date #lo usaremos más adelante, en el gráfico para estudiar la variable date
+DATOS<- read.csv("kc_house_data.csv")
+datee= as.Date(DATOS$date, "%Y%m%dT%H%M%S")
+datos$waterfront = as.factor(datos$waterfront)
+datos$zipcode = as.factor(datos$zipcode)
+datos$condition=as.factor(datos$condition)
+datos$date=as.factor(datos$date)
+datos$view=as.factor(datos$view)
+
+str(datos)
+```
+
+Con "str(datos)" podemos ver cómo ya si tenemos las variables bien codificadas.
+
+# 3. División de los datos es training y testing
+Para poder crear nuestro modelo y ver su capacidad de predicción dividiremos el conjunto de datos en dos con un porcentaje de 70% y 30% para el grupo de training y test, respectivamente.
+
+```{r}
+set.seed(12345)
+inTraining <- createDataPartition(datos$price,
+                                  p = .7, list = FALSE, times = 1)
+d_training <- slice(datos, inTraining)
+d_testing <- slice(datos, -inTraining)
+ntrain=nrow(d_training)
+```
+
+
+# 4. Análisis exploratorio de datos faltantes: VIM
+
+Veamos cuántas observaciones con datos faltantes tenemos en nuestro dataset:
+
+```{r}
+ntrain-sum(complete.cases(d_training))
+```
+Obtenemos que hay 68 observaciones de un total de 15131, que tienen datos faltantes. Esto se corresponde con una proporcion de 0.0043 de casos con algún dato faltante. Lo cual al ser menor de 0.03 no tenemos un problema grave. Entre las posibles técnicas a aplicar para la imputación de estos datos faltantes podría ser el asignar la mediana del resto de sus valores conocidos en el caso de variables cualitativas  y en el caso de las variables cualitativas asignar la categoría más frecuente de sus conocidas.    
+Otra opción, debido al bajo número de observaciones con datos faltantes, sería descartar directamente los casos con NA.
+
+Realizaremos unos gráficos para analizar posibles relaciones y estructuras de los valores faltantes.
+
+```{r}
+aggr_plot=aggr(d_training,,col=c("green","red"),numbers=TRUE, sortVars=TRUE, labels=names(d_training),cex.axis=0.7,gap=3,ylab=c("Hist","Pat")) 
+
+```
+Los gráficos anteriores nos permiten descubrir rápidamente qué variables de nuestro dataset tienen mayor cantidad de datos faltantes (gráfico a la izquierda) y si puede existir algún patrón de co-ocurrencia en los datos faltantes de varias variables (gráfico a la derecha). 
+
+```{r}
+summary(aggr_plot)
+```
+
+Aquí podemos observar el porcentaje de valores perdidos para cada variable. Dichos porcentajes nos permiten ver que no existe ningun patrón de cocurrencia en los datos faltantes de las variables. Esto es, que no tenemos valores de variables que tienden a suceder conjuntamente. 
+
+Debido al bajo número de observaciones con datos faltantes y a que no existe ningún patrón de cocurrencia en los datos faltantes procedemos a eliminarlos de nuestro estudio.
+
+```{r}
+d_training=d_training[complete.cases(d_training)==TRUE,] #eliminamos los datos faltantes
+dim(d_training)
+```
+Ahora trabajaremos con un conjunto de datos con 15063 observaciones.
+
+# 5. Estudio de las variables y sus correspondientes transformaciones 
+
+## Price 
+
+El histograma es un gráfico que representa de forma bastante precisa la distribución del conjunto de datos pudiéndose observar su dispersión y/o asimetría. Por ello, realizaremos un histograma del precio para ver cómose comporta esta variable.
+
+```{r}
+d_training %>% ggplot( aes(x=price)) + geom_histogram(color="black", fill="yellow", lwd=0.3)+
+   ggtitle("Histograma del precio") +ylab("Frecuencia")
+```
+
+Observamos que la distribución de la variable precio presenta un alto sesgo positivo, por lo que le vamos a aplicar una transformación logarítmica para ver si así consegimos una distribución más simétrica.
+
+```{r}
+p1=d_training %>% ggplot( aes(x= price)) + geom_histogram(aes(y=..density..), bins=30, colour="black", fill="yellow") +
+  geom_density(alpha=.5, fill="blue") + ggtitle("Precio")
+p2=d_training %>% mutate(log10_p=log(price)) %>%  ggplot( aes(x=log10_p)) + geom_histogram(aes(y=..density..), bins=30, colour="black", fill="yellow") +
+  geom_density(alpha=.5, fill="blue") +  ggtitle("Logaritmo del precio")
+grid.arrange(p1,p2,nrow=2)
+```
+Ahora obtenemos una distribución que a primera vista es como una campana de gauss, de modo que podríamos afirmar que dicha variable sigue una distribución normal. Por ello, a partir de ahora trabajaremos con la variable log(price) en vez de con price.
+
+```{r}
+d_training$price=log(d_training$price)
+```
+
+## Bedrooms
+
+
+```{r}
+d1=d_training %>%  ggplot( aes(x=bedrooms)) + geom_histogram(colour="black", bins =30,fill="tomato")+
+  ylab("Frecuencias")
+
+d2=d_training %>%  ggplot( aes(x=as.factor(bedrooms), y=price, fill=as.factor(bedrooms))) + geom_boxplot()+
+  labs(x="bedrooms")+theme(legend.position="none")
+
+d3=ggplot(d_training, aes(x = "", y = bedrooms)) + stat_boxplot(geom = "errorbar",  width = 0.3) +
+  geom_boxplot(fill = "orange", outlier.colour = "red", alpha = 0.9) +
+  xlab("")
+grid.arrange(d1,d2,d3,nrow=2) 
+```
+En los gráficos representados podemos observar que según aumenta el número de habitaciones aumenta el precio de las casas. 
+También podemos ver posibles outliers, como las casas con 0 y 6 o más habitaciones. Estudiemoslas.
+
+
+```{r}
+sum(d_training$bedrooms == 0)
+```
+Vemos que hay 13 casas con cero habitaciones. Aunque no es frecuente hay casas, llamadas estudios, en las cuales todo está en una misma estancia. Por ello no consideramos estas observaciones como datos erróneos y las seguimos manteniendo en nuestro dataset. 
+
+
+```{r}
+sum(d_training$bedrooms >=6) 
+```
+Hay 228 casas con 6 y más habitaciones. Al ser un número elevado podemos intuir que tener alto número de habitaciones es algo normal por la zona.
+
+```{r}
+sum(d_training$bedrooms > 8)
+```
+
+Sin embargo, solo hay 7 casas con 9 o más habitaciones. Esto ya es algo más peculiar, de modo que necesitarán un estudio más profundo.
+
+En principio comprobamos en el mapa la hubicación de estas casas, por si se diese el caso de que están cerca. Si esto fuese así podríamos pensar que es propio de la zona.
+
+```{r,  echo=FALSE, message=FALSE}
+
+HabAlt=d_training[d_training$bedrooms > 8,]
+
+leaflet(HabAlt) %>% 
+    addProviderTiles("OpenStreetMap",group = "OpenStreetMap") %>%
+addCircleMarkers(radius = 4, color = "red",fillOpacity=0.9, lng=~long,lat=~lat,
+                 group = "circlemarkers", popup= ~paste("Número de habitaciones:",HabAlt$bedrooms))
+
+
+```
+Observamos que las casas no están en un misma zona.
+Lo siguiente que haremos será ver el número de habitaciones que tienen las casas de alrededor.
+
+
+```{r,  echo=FALSE, message=FALSE}
+d_training2=mutate(d_training,bedFac=as.factor(d_training$bedrooms))
+factpal <- colorFactor(c("black","blue","yellow","orange","pink","red","purple", "#7FFFD4","#DEB887","#7FFF00","#556B2F","#9932CC"),d_training2$bedFac )
+
+leaflet(d_training2) %>% 
+    addProviderTiles("Esri.NatGeoWorldMap",group = "Esri.NatGeoWorldMap") %>%
+addCircleMarkers(radius = 2, color = ~factpal(bedFac),fillOpacity=0.9, lng=~long,lat=~lat,
+                 group = "circlemarkers", popup= ~paste("Número de habitaciones:",d_training2$bedrooms),
+                  label = ~as.character(HabAlt$bedrooms)) %>%
+  addMarkers(
+    data = HabAlt, label = paste(
+      "Zipcode: ",HabAlt$zipcode, ";",
+      "Número de habitaciones: ",as.character(HabAlt$bedrooms))) %>%
+   addLegend(position = "bottomright",
+            title = "Leyenda",
+            pal = factpal,
+            values = ~bedFac)
+```
+
+Comprobando el número de habitaciones de las casas cercanas a nuestros posibles outliers observamos que estas tienen entre 2 y 3 habitaciones. Por ello, el que haya casas por esas zonas con altos números de dormitorios es un poco extraño. Ya que el número de observaciones que tienen más de 8 habitaciones respecto al total de los datos de entrenamiento es muy poco representativo las eliminaremos del estudio.
+
+```{r}
+d_training = d_training[d_training$bedrooms < 8,]
+```
+
+## Bathrooms
+Observemos los posibles valores que toma esta variable:
+
+```{r}
+table(d_training$bathrooms)
+```
+La variable Bathrooms puede tomar valores decimales de 0.25 en 0.25. Y va desde 0 a 8. Esto es debido a que el número de baños se contabiliza por las piezas y cada baño completo tiene 4 piezas.
+
+- Baño (4 piezas) -> Inodoro, lavabo, bañera y ducha.(1 unidad) - Baño completo
+- Baño (3 piezas) -> Inodoro, lavabo y ducha. (0.75 unidad) - Baño con ducha
+- Baño (2 piezas) -> Inodoro y lavabo. (0.5 unidad) - Aseo
+- Baño (1 pieza) -> Inodoro (0.25 unidad) - Aseo
+
+Vamos a agrupar los baños del siguiente modo:
+
+- Valores: 0.75, 1 == 1 baño
+- Valores: 1.25, 1.5, 1.75, 2 == 2 baños
+- Valores: 2.25, 2.5, 2.75, 3 == 3 baños
+
+Y así hasta tener 8 baños.
+
+Sin embargo, las casas cuya variable baño tome un valor menor de 0.75 no las consideraremos, ya que una casa que no tenga como mínimo un ducha o un lavabo no es algo lógico. Dependiendo del número de casos en los que ocurra esto, los tomaremos como datos faltantes o simplemente errores de mediciones y si no son muchas las elimiaremos del estudio.
+
+```{r}
+sum(d_training$bathrooms<0.75)
+```
+Obtenemos 14 casas. Que es una número irrelevante frente al total de casos que tenemos. Por lo que eliminaremos estos casos del estudio.
+
+```{r}
+d_training=d_training[-which(d_training$bathrooms<0.75),]
+```
+
+A continuación lo que haremos será cambiar la variable para que considere número de baños en vez de estancias.
+
+```{r}
+d_training$bathrooms=ceiling(d_training$bathrooms)
+```
+
+
+```{r}
+ggplot(d_training, aes(x = "", y = bathrooms)) +
+  stat_boxplot(geom = "errorbar", width = 0.3) +
+  geom_boxplot(fill = "orange", outlier.colour = "red", alpha = 0.9) + 
+  ggtitle("Boxplot bathrooms") + 
+  xlab("") +   
+  coord_flip() 
+```
+
+```{r}
+table(d_training$bathrooms) 
+```
+Podemos observar que hay dos casas con 8 baños y 4 casas con 7 baños. Debido a que esto no es algo común las analizaremos.´
+
+Estudiamos las casas con 7 baños.
+```{r}
+d_training[d_training$bathrooms==7,] 
+```
+
+Nos concuerda el número de baños con los pies cuadrados de la casa, por lo que las conservaremos en nuestro conjunto de datos.    
+Ahora estudiaremos la casa con 8 baños:
+
+```{r}
+d_training[d_training$bathrooms==8,]
+```
+Observamos un caso que tiene más baños que habitaciones y otro caso que tiene demasiados baños y habitaciones respecto a los pies cuadrados de la casa. Lo cual no tiene mucho sentido. Por lo tanto, eliminamos estas dos observaciones del estudio.
+
+```{r}
+d_training=d_training[-which(d_training$bathrooms==8),]
+```
+
+Agrupamos las casas según el número de baños y realizamos un boxplot para ver si hay diferencias o no en el precio.
+```{r}
+d_training %>%  ggplot(aes(x=as.factor(d_training$bathrooms), y=price, fill=as.factor(d_training$bathrooms))) + geom_boxplot()+
+  labs(x="bathrooms_group")+theme(legend.position="none")
+
+```
+Se puede ver claramente como según van aumentando el número de baños, aumenta el precio de la casa.
+
+
+
+## Sqft_living
+
+Veamos su comportamiento frente al precio:
+
+```{r}
+l1<-d_training %>% ggplot(aes(x=sqft_living)) + 
+  geom_histogram(aes(y=..density..), bins=30, colour="black", fill="yellow") + 
+  geom_density(alpha=.3, fill="blue")
+
+l2<-d_training %>% ggplot(aes(sqft_living, price)) +
+  geom_point(alpha = 0.5,col="blue") +
+  geom_smooth(se = F, method = "lm", color = "red") +
+  scale_y_continuous(breaks = seq(0,8000000, by = 1000000)) 
+
+grid.arrange(l1,l2, nrow=1)
+```
+
+Viendo el scaterplot de los pies cuadrados de la casa frente al precio (gráfico derecho)  podemos ver que hay una relación creciente, a medida que aumentan los pies cuadrados de las casas aumenta el precio.
+Además, en el gráfico izquierdo podemos observar como la distribución de la variable presenta un alto sesgo positivo.  Debido a que sería conveniente transformarla para que la distribución de valores fuese más homogénea, le aplicamos una transformación logarítmica.
+
+```{r}
+d_training$sqft_living= log(d_training$sqft_living)
+
+l1log <- ggplot(d_training, aes(x=sqft_living)) + geom_histogram(aes(y=..density..), bins=30, colour="black", fill="white") + geom_density(alpha=.3, fill="#E1AF00")
+
+l2log <- ggplot(d_training, aes(sqft_living, price)) +
+  geom_point(alpha = 0.5,col="blue") +
+  geom_smooth(se = F, method = "lm", color = "red") +
+  scale_y_continuous(breaks = seq(0,8000000, by = 1000000))
+
+grid.arrange(l1log,l2log, nrow=1)
+```
+
+Se puede observar cómo ahora los datos se han normalizado (la distribución presenta la forma de una campana de Gauss).
+
+
+
+## Basement y above
+
+A continuación vamos a comprobar que la variable above más la variable basement coincide con la variable living. A partir de aquí, vamos a deducir que casas tienen sótano y si el tenerlo o no afecta en el precio.
+
+```{r}
+Total=log(d_training$sqft_above+d_training$sqft_basement)
+all(Total==d_training$sqft_living) 
+#comprobamos que efectivamente sqft_above+sqft_basement=sqft_living
+a=cbind(Total,living=d_training$sqft_living,liv15=log(d_training$sqft_living15),lot=log(d_training$sqft_lot),lot15=(d_training$sqft_lot15))
+head(a)
+
+d_training$basement=ifelse(d_training$sqft_living-log(d_training$sqft_above)==0,"0","1") #0 es que no tiene sotano
+d_training$basement=as.factor(d_training$basement)
+
+ggplot(d_training, aes(x=basement, y=price, fill=basement)) + geom_boxplot()+
+  labs(x="Tener sótano (1) o no tenerlo (0)")+
+  scale_y_continuous(labels = scales::dollar,n.breaks = 15)
+```
+
+Se ve un pequeño incremento en el precio en las casas que tienen sótano. Pero no es perceptible, por lo que no consideraremos el tener o no sótano relevante en el modelo.
+
+## Living15
+Para comprobar si podemos explicar la variable sqft_living15 a partir de sqft_living realizaremos una recta de regresión:
+```{r}
+head(a)
+cbind(mean(a[,3]-a[,2]),mean(a[,5]-a[,4]))
+summary(lm(log(d_training$sqft_living15)~d_training$sqft_living, data=d_training))
+```
+Realizamos un contraste de hipótesis en el cual la hipótesis nula es que la variable no es relevante para el modelo. Esto es, no podemos explicar la variable respuesta (sqft_living15) en función de la explicativa (sqft_living). Al obtener un p.valor menor que 0.05 rechazamos H0 y por consiguiente podemos explicar living15 a partir de living. (Aún así no obtenemos un R^2 ajustado bueno que digamos).
+
+Veamos que variable de entre estas dos explica mejor el precio:
+```{r }
+summary(lm(d_training$price~d_training$sqft_living15, data=d_training)) 
+summary(lm(d_training$price~d_training$sqft_living, data=d_training)) 
+```
+
+Prediciendo el precio según living obtenemos un R² un poco mayor. Luego entre living y living15 nos quedaremos con living.
+
+## Sqft_lot
+
+```{r}
+sl0=ggplot(d_training, aes(x = "", y = sqft_lot)) +
+  stat_boxplot(geom = "errorbar",  width = 0.3) +
+  geom_boxplot(fill = "orange", outlier.colour = "red",alpha = 0.9) + 
+   xlab("") +   coord_flip() 
+
+sl1=ggplot(d_training, aes(x=sqft_lot)) + geom_histogram(aes(y=..density..), bins=30, colour="black", fill="tomato") 
+
+sl2=ggplot(d_training, aes(sqft_lot, price)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(se = F, method = "lm", color = "blue") +
+  scale_y_continuous(breaks = seq(0,8000000, by = 1000000)) 
+
+grid.arrange(sl0,sl1,sl2, nrow=2)
+```
+
+Esta variable no parece que tenga una relación lineal muy clara con price, por lo que no vemos necesario hacer ninguna transformación ya que no la usaremos para la implementación del modelo. 
+Haciendo el estudio de manera análoga para lot15 llegamos a la misma conclusión.
+
+## Floors
+
+```{r}
+table(d_training$floors)
+```
+
+No se puede tener un número de pisos que no sea entero. Debido a que no tenemos muy claro el significado de estos decimales, supondremos que indica que la planta está inacabada o que hay espacio en la misma que no se está usando. Atendiendo a esta consideración sobre el número de plantas truncaremos la variable.
+
+```{r}
+d_training$floors=trunc(d_training$floors)
+```
+
+De esta forma nos quedamos con 3 posibles pisos. Veamos si esto influye o no en el precio de las casas.
+
+```{r}
+f1=ggplot(d_training, aes(x=as.factor(floors), y=price, fill=as.factor(floors))) + geom_boxplot()+
+  labs(x="Waterfront")+
+  scale_y_continuous(labels = scales::dollar,n.breaks = 15)
+f2=ggplot(d_training, aes(x=as.factor(floors))) + geom_histogram(colour="black", stat ="count",fill="yellow")+
+  labs(x="Condición",y="Frecuencia")
+grid.arrange(f2,f1, nrow=1)
+```
+
+Vemos que el numero de plantas no influye en el precio de las casas.
+
+## Waterfront
+
+La codificación respecto si tiene o no vistas al mar es 0 y 1, respectivamente.
+ 
+```{r}
+ggplot(d_training, aes(x=waterfront, y=price, fill=waterfront)) + geom_boxplot()+
+  labs(x="Waterfront")+
+  scale_y_continuous(labels = scales::dollar,n.breaks = 15)
+```
+
+Observamos un incremento notorio en el precio de las casas que tienen vistas al mar.
+
+## Yr_renovated
+
+Vamos a hacer un cambio a esta variable. Y la cambiaremos a sí o no en función de si ha sido o no renovada. Codificamos 0 como no renovada y 1 como renovada, y comprobamos si el que la casa haya sido o no renovada influye en el precio.
+
+
+```{r}
+d_training$yr_renovated=ifelse(d_training$yr_renovated==0,"0", "1") 
+d_training$yr_renovated=as.factor(d_training$yr_renovated)
+
+ggplot(d_training, aes(x=yr_renovated, y=price, fill=yr_renovated)) + geom_boxplot()+
+  labs(x="No renovada VS Renovada")+theme(legend.position="none")+
+  scale_y_continuous(labels = scales::dollar,n.breaks = 15)
+```
+Veamos que sí influye en el precio el que la casa haya sido o no renovada.
+
+
+## Yr_built
+
+Las casas se construyeron entre 1900 y 2015. Veamos si influye esto en el precio
+
+```{r}
+summarise(d_training, añoMin=min(d_training$yr_built),añoMax= max(d_training$yr_built))
+ggplot(d_training, aes(x=yr_built)) + geom_histogram(colour="black",bins=30, fill="#E1AF00")+
+  labs(title="Histograma del precio y año de construcción", x="Año construida",y="Precio")
+```
+
+Vemos un claro aumento en el precio de las casas construidas en los últimos años.
+
+## Condition
+
+```{r}
+table(d_training$condition)
+c1=ggplot(d_training, aes(x=condition, y=price, fill=condition)) + geom_boxplot()+
+  ylab("Precio")+theme(legend.position="none")+
+  scale_y_continuous(labels = scales::dollar,n.breaks = 15)
+
+c2=ggplot(d_training, aes(x=condition)) + geom_histogram(colour="black", stat ="count",fill="yellow")+
+  ylab("Frecuencia") 
+
+grid.arrange(c1,c2, nrow=1)
+```
+
+Observamos que sí es una variable significativa.
+
+## View
+
+```{r}
+v1=ggplot(d_training, aes(x=view, y=price, fill=view)) + geom_boxplot()+
+  ylab("Precio")+
+  scale_y_continuous(labels = scales::dollar,n.breaks = 15) 
+
+v2=ggplot(d_training, aes(x=view)) + geom_histogram(colour="black", stat ="count",fill="yellow")+
+ ylab("Frecuencia")
+grid.arrange(v1,v2, nrow=1)
+```
+
+Observamos que si la casa tiene mejores vistas su precio es mayor. Sin embargo, no hay muchas casas con buenas vistas.
+
+## Grade 
+
+La variable grade mide el nivel de construcción y diseño de la casa en un rango del 1 al 13. Entre los valores 1 y 3 indica que no llega a la construcción y el diseño de edificios, 7 que tiene un nivel promedio, y entre 11 y 13 indica que tiene un alto nivel de calidad de construcción y diseño. 
+
+En función de la descripción de la variable tomada, vamos a agruparla en 4 para reducir el número de sus posibles niveles. 
+
+- Inacabada = 0 a 3
+- Aceptable = 4 a 7
+- Buena = 8 a 10
+- Excelente = 11 a 13
+
+```{r}
+d_training$grade <- cut(d_training$grade, breaks = c(0,3,7,10,13), labels = c("Inacabada","Aceptable","Buena","Excelente"))
+
+ggplot(d_training, aes(x=grade, y=price, fill=grade)) + geom_boxplot()+
+  labs(x="Grado de construcción",y="Precio")+
+  scale_y_continuous(labels = scales::dollar,n.breaks = 15)
+```
+
+El grado de construcción sí que afecta al precio, y bastante como podemos observar.
+
+## Zipcode
+Realizamos un boxplot diferenciando con colores los distintos valores de zipcode:
+```{r}
+ggplot(d_training, aes(x=zipcode, y=price, fill=zipcode)) + geom_boxplot()+
+  ylab("Precio")+ guides(fill=FALSE) +
+  scale_y_continuous(labels = scales::dollar,n.breaks = 15) +
+  theme(
+        axis.text.x = element_text(angle=90,size=7)
+     )
+```
+
+A simple vista no se observa ningún patrón de precios dependiendo del área donde esté ubicada la casa.
+
+
+# 6. Ajuste, interpretación y diagnosis del modelo de regresión lineal
+
+Nuestro objetivo es predecir el precio de las casas en el condado de King y comprender qué factores son los responsables de un valor de propiedad más alto.
+
+Antes de nada eliminaremos del conjunto de dato la variable "identificador" ya que no es relevante para predecir el precio de la vivienda. No es más que un identificador de la casa, como sus nombre por así decirlo .
+
+```{r}
+d_training=select(d_training,-id)
+```
+
+A continuación ajustaremos una recta de regresión para predecir la variable respuesta precio en función de las variables explicativas del modelo. 
+
+Veamos en principio la colinealidad entre las varibles cuantitativas
+```{r}
+d_train_cuant=select(d_training,-date,-waterfront,-view,-condition,-basement,-grade,-yr_built,-yr_renovated,-zipcode) #seleccionamos las variables cuantitativas
+
+correlaciones= cor(d_train_cuant) #correlación entre las variables cuantitativas
+correlaciones
+
+corrplot(correlaciones,type="upper")
+```
+
+
+Correlaciones con la variable respuesta:
+
+```{r}
+correlaciones[,1] 
+```
+
+Con respecto al precio vemos alta correlación con el sqft_living y sqft_above. De modo que en el modelo futuro se espera que estas variables tengan mayor peso.
+
+```{r}
+det(correlaciones)
+```
+
+El determinante de la matriz de correlaciones entre las variables explicativas es cero. Esto implica que si consideramos todas estas variables tendremos un problema de multicolinealidad. Por ello, para construir la recta de regresión realizaremos una selección de variables a mano.
+
+Según el estudio visual de las variables más la matriz de correlaciones tomamos en principio las siguiente selección de variables:
+
+```{r}
+model1 <- lm(price~bedrooms+bathrooms+sqft_living+waterfront+view+condition+
+               grade+yr_renovated+yr_built+lat, data=d_training)
+summary(model1)
+```
+Obtenemos unos coeficientes lógicos y un R² ajustado de 0.7316. En cambio indica que a mayor número de habitaciones menor precio, lo cual es  un poco raro.  
+
+En general es buen modelo, aunque la variable grade no parece influir mucho. Vemos que pasa si no la introducimos:
+
+```{r}
+model1b=lm(price~bedrooms+bathrooms+sqft_living+waterfront+view+condition+
+    yr_renovated+yr_built+lat, data=d_training) #model1 sin el grade
+summary(model1b) 
+
+model1c <- lm(price~bathrooms+sqft_living+waterfront+view+condition+
+               grade+yr_renovated+yr_built+lat, data=d_training) #modelo1 sin bedroom
+summary(model1c)
+```
+El modelo llamado "model1b" indica que mientras más habitaciones más baratas las casas... sospechoso y un R² = 0.6941. 
+EL model1c presenta en general unos coeficientes lógicos, aunque los de condi2 y vieew1 nos chocan un poco y un R²=0.7293.
+
+
+
+```{r}
+model1cc <- lm(price~bathrooms+sqft_living+waterfront+view+condition+
+                yr_renovated+yr_built+lat, data=d_training) # modelo1c sin grade
+summary(model1cc)
+```
+
+Obtenemos un R² de 0.6878, lo cual empeoramos. Rechazamos esta selección de variables. 
+
+
+```{r}
+model1a=(lm(price~sqft_living+waterfront+view+condition+
+             +grade+yr_renovated+yr_built+lat, data=d_training)) #model1 quitando bathrooms y bedrooms
+summary(model1a)#coeficientes lógicos, aunque cond2 y view1 no del todo y R²= 0.7263
+
+model2 =lm(price~bathrooms+sqft_living+waterfront+view+condition+
+             grade+yr_renovated+lat, data=d_training) #modelo1 sin bedroom ni yr_built
+summary(model2)#los coeficientes del grade no son lógicos
+
+model3= lm(price~bathrooms+sqft_living+waterfront+view+condition+
+     grade+yr_built+lat, data=d_training) #modelo1 sin bedroom sin bedroom ni yr_renovated
+summary(model3)#coeficientes que no son lógicos y R² = 0.7286 
+```
+
+Teniendo en cuenta el R² y los coeficientes de las variables seleccionadas en cada modelo anterior nos quedaremos con el modelo denominado "model1a" :    
+  model1a=lm(price~sqft_living+waterfront+view+condition+    
+             +grade+yr_renovated+yr_built+lat, data=d_training)
+y veamos cómo de bien o mal precide el precio de las casas del conjunto train.
+
+**Colinealidad en el modelo**
+Para ver si existe colinealidad entre las variables seleccionadas en nuestro modelo seleccionado vamos a usar el Factor de Inflación de la Varianza (VIF), 
+
+Los límites de referencia que se suelen emplear son:
+
+* VIF = 1: Ausencia total de colinealidad.
+* 1 < VIF < 5: La regresión puede verse afectada por cierta colinealidad.
+* 5 < VIF < 10: Causa de preocupación.
+```{r}
+vif(model1a)
+```
+Observamos que los valores se encuentran entre 1 y 2 y por consiguiente no nos indican la presencia de colinealidad entre variables.
+
+
+**Análisis de residuos**
+
+Una vez estimado el modelo de regresión y obtenido los residuos hay que comprobar si las hipótesis que se han utilizado para construirlo se pueden asumir como ciertas o no. Si no lo son, habrá que modificar el modelo para adaptarlo a los datos observados. 
+
+Para hacer el modelo se asumen 4 hipótesis:
+* 1 Linealidad: La relación entre la variable respuesta y las variables explicativas es lineal.
+* 2 Homocedasticidad: La variabilidad del error es constante. Esto es, el error sigue una distribución normal con varianza desconocida, pero todas iguales y constantes.
+* 3 Normalidad: Las perturbaciones (el error) siguen una distribución normal.
+* 4 Independencia: Las perturbaciones son independientes entre sí.
+ 
+ ```{r}
+par(mfrow=c(2,2))
+plot(model1a)
+```
+ 
+*Linealidad*
+
+Se está analizando si existe una relación lineal entre la variable respuesta y las variables explicativas. Esto lo comprobamos en la primera de las 4 gráficas que tenemos. 
+
+Si se verifica la hipótesis de linealidad, esta gráfica debería de presentar una simetría respecto al eje horizontal. Como vemos en nuestro gráfico si se verifica la linealidad.
+
+*Normalidad*
+
+Para comprobar la normalidad de los residuos hay que hacer un gráfico cuantil-cuantil (un Q-Q plot) de los residuos, que se corresponde con la gŕafica de la esquina superior derecha.
+
+A simple vista podŕiamos decir que a pesar de las colas si siguen una distribución normal. Comprobémoslo usando un contraste de normalidad:
+
+```{r}
+residuos=resid(model1a)
+ks.test(residuos, 'pnorm')
+```
+
+Se contrasta la hipótesis nula de que los residuos del modelo se distribuyen según una Normal. Al obtener un p.valor menor que 0.05 rechazamos H0 y por consiguiente se tiene que los residuos
+no siguen una distribución Normal. Sin embargo, debido a que los modelos lineales en general son robustos a la ligera falta de normalidad asumiremos la hipótesis de normalidad como cierta y proseguiremos con el estudio.
+
+*Homocedasticidad*
+
+Para comprobar la homocedasticidad  hay que hacer un gráfico de dispersión cuantil-cuantil de los residuos. Lo ideal es que la recta sea parecida a y=0. Debemos obtener una línea recta horizontal. Si no fuese así lo que nos está mostrando es cierta dependencia entre la magnitud de los errores y la predicción.
+
+El gŕafico inferior derecho es un gráfico de leverage, de apalancamiento, que sirve para comprobar si hay alguna observación que sea demasiado influyente en la construcción de los coeficientes del modelo. Si los puntos están agrupados y sin sobrepasar las curvas de nivel de la distancia de cook no habrá ningún problema. Si hay algún dato muy influyente, el gráfico te da un número indicando cuál es exactamente y tendríamos que estudiarlas para ver si son un error o un dato verdaderamente distinto al resto (un dato que sigue un patrón muy distinto al resto) e investigar su causa. El estudio de estos valores atípicos puede ser interesante porque pueden modificar los coeficientes del modelo
+
+
+# 7. Predicción sobre los datos de testing. Evaluación del modelo
+
+Una vez construido el modelo predictor, comprobemos como de bueno o malo o es. Esto lo haremos sobre el conjunto test que tenemos. Vamos a comprobar si con el modelo elegido obtenemos una buena predicción del precio. 
+
+Primero, realizaremos las mismas transformaciones, agrupaciones y categorizaciones que realizamos con los datos de train.
+
+```{r}
+d_testing$price <- log(d_testing$price)
+
+d_testing$bathrooms=ceiling(d_testing$bathrooms)
+
+d_testing$sqft_living<- log(d_testing$sqft_living)
+
+d_testing$grade <- cut(d_testing$grade, breaks = c(0,3,7,10,13), labels = c("Inacabada","Aceptable","Buena","Excelente"))
+
+
+d_testing$basement=ifelse(d_testing$sqft_living-log(d_testing$sqft_above)==0,"0","1") 
+d_testing$basement=as.factor(d_testing$basement)
+
+d_testing$yr_renovated=ifelse(d_testing$yr_renovated==0,"0", "1") 
+d_testing$yr_renovated=as.factor(d_testing$yr_renovated)
+```
+
+Ahora veamos cómo predice el modelo:
+```{r}
+pred=predict(model1a,d_testing[,-3])
+New=as.data.frame(cbind(Prediccion=exp(pred),Observ=exp(d_testing[,3]), Dif=exp(pred)-exp(d_testing[,3])))
+summary(New)
+```
+
+Obtenemos que el valor absoluto de la media de la diferencia entre el precio predicho y el observado es de 22416. Debido a que tenemos un error pequeño de predicción podemos considerar que tenemos un buen modelo.
+
+```{r}
+plot(exp(d_testing$price),exp(pred),col="blue", xlab = "Precio según el modelo",
+     ylab = "Precio observado", main="Representación del precio predicho frente al observado")
+```
